@@ -1,0 +1,305 @@
+#pragma once
+
+#ifndef WASM_LOCAL_DEBUG
+#include "service.h"
+
+namespace aingle {
+
+address self_address(void);
+address caller_address(void);
+address entry_address(void);
+std::vector<char> get_input(void);
+bool check_witness(const address &v);
+H256 current_blockhash(void);
+H256 current_txhash(void);
+address contract_migrate(const std::vector<char> &code, const uint32_t &vmtype, const std::string &name, const std::string &version, const std::string &author, const std::string &email, const std::string &desc);
+
+address self_address(void) {
+	address t;
+	::aingle_self_address(t.data());
+	return t;
+}
+
+address caller_address(void) {
+	address t;
+	::aingle_caller_address(t.data());
+	return t;
+}
+
+address entry_address(void) {
+	address t;
+	::aingle_entry_address(t.data());
+	return t;
+}
+
+std::vector<char>  get_input(void) {
+	std::vector<char> result;
+	size_t len = aingle_input_length();
+	result.resize(len);
+	::aingle_get_input(result.data());
+	return result;
+}
+
+bool check_witness(const address &v) {
+	uint32_t auth = ::aingle_check_witness(v.data());
+	return bool(auth);
+}
+
+H256 current_blockhash(void) {
+	H256 t;
+	::aingle_current_blockhash(t.data());
+	return t;
+}
+
+H256 current_txhash(void) {
+	H256 t;
+	::aingle_current_txhash(t.data());
+	return t;
+}
+
+template<typename T>
+void aingle_return(const T &t) {
+	auto data = pack(t);
+	::aingle_return(data.data(), data.size());
+}
+
+void notify(const std::vector<char> &s) {
+	::aingle_notify(s.data(), s.size());
+}
+
+template<typename T>
+void call_native(const address &addr, const std::vector<char> &v, T &t) {
+	size_t outputlen;
+	outputlen = ::aingle_call_contract((void*)addr.data(), v.data(), v.size());
+
+	memset((void *)&t, 0, sizeof(T));
+	aingle_assert(outputlen <= sizeof(T), "output length too big to fill return type.");
+	::aingle_get_call_output((void *)&t);
+}
+
+/* if type T is a vector or map. the length only can get from outputlen. */
+template<typename T>
+void call_contract(const address &addr, const std::vector<char> &v, T &t) {
+	size_t outputlen = ::aingle_call_contract((void*)addr.data(), v.data(), v.size());
+	std::vector<char> res;
+	res.resize(outputlen);
+	::aingle_get_call_output(res.data());
+	t = aingle_internal_namespace::unpack<T>(res);
+}
+
+namespace aingle_internal_namespace {
+template<typename T>
+void unpack_neoargs(const std::vector<char>& v, T &t);
+}
+/* if type T is a vector or map. the length only can get from outputlen. */
+template<typename T>
+void call_neo_contract(const address &addr, const std::vector<char> &v, T &t) {
+	size_t outputlen = ::aingle_call_contract((void*)addr.data(), v.data(), v.size());
+	std::vector<char> res;
+	res.resize(outputlen);
+	::aingle_get_call_output(res.data());
+	aingle_internal_namespace::unpack_neoargs(res,t);
+}
+
+template<typename T>
+void get_call_output(T &t) {
+	size_t outputlen = ::aingle_call_output_length();
+	std::vector<char> res;
+	res.resize(outputlen);
+	::aingle_get_call_output(res.data());
+	t = aingle_internal_namespace::unpack<T>(res);
+}
+
+address contract_migrate(const std::vector<char> &code, const uint32_t &vmtype, const std::string &name, const std::string &version, const std::string &author, const std::string &email, const std::string &desc) {
+	address addr;
+	size_t len = ::aingle_contract_migrate(code.data(), code.size(), vmtype, name.data(), name.size(), version.data(), version.size(), author.data(), author.size(), email.data(), email.size(), desc.data(), desc.size(), addr.data());
+	check(len == ADDRLENGTH, "contract_migrateerror. address must be 20 bytes.");
+	return addr;
+}
+
+address contract_create(const std::vector<char> &code, const uint32_t &vmtype, const std::string &name, const std::string &version, const std::string &author, const std::string &email, const std::string &desc) {
+	address addr;
+	size_t len = ::aingle_contract_create(code.data(), code.size(), vmtype, name.data(), name.size(), version.data(), version.size(), author.data(), author.size(), email.data(), email.size(), desc.data(), desc.size(), addr.data());
+	check(len == ADDRLENGTH, "contract_migrateerror. address must be 20 bytes.");
+	return addr;
+}
+
+void contract_destroy(void) {
+	::aingle_contract_destroy();
+}
+
+/* similar with call_contract, then get the output. the val length also can not assure by smartcontract. like std::vector, std::map. etc. this will get any num element. */
+template<typename T>
+bool storage_get(const key &key, T &val) {
+	std::vector<char> s;
+	size_t initlength = aingle_internal_namespace::pack_size(val);
+	s.resize(initlength);
+	size_t length = ::aingle_storage_read(key.data(), key.size(), s.data(), s.size(), 0);
+	if (length == UINT32_MAX) {
+		return false;
+	}
+
+	/* if length < initlength. then only ready length to vector s*/
+	if (length > initlength) {
+		/* bigger then size of serialize T is ok. but can not smaller.*/
+		s.resize(length);
+		/* not resize change both the size and capacity. so the memory will realloc. should return from offset 0 */
+		::aingle_storage_read(key.data(), key.size(), s.data(), s.size(), 0);
+	}
+
+	val = aingle_internal_namespace::unpack<T>(s);
+	return true;
+}
+
+template<typename T>
+void storage_put(const key &key, const T &val) {
+	auto data = pack(val);
+	::aingle_storage_write(key.data(), key.size(), data.data(), data.size());
+}
+
+void storage_delete(const key& key) {
+	::aingle_storage_delete(key.data(), key.size());
+}
+
+uint32_t block_height(void) {
+	return ::aingle_block_height();
+}
+
+uint64_t timestamp(void) {
+	return ::aingle_timestamp();
+}
+
+void sha256(std::vector<char> &src, H256 &res) {
+	return ::aingle_sha256(src.data(), src.size(), res.data());
+}
+
+void hash256(std::vector<char> &src, H256 &res) {
+	H256 t;
+	sha256(src, t);
+	::aingle_sha256(t.data(), t.size(), res.data());
+}
+
+#define make_key pack
+}
+#else
+extern "C" void aingle_debug( const char* cstr, const uint32_t len);
+extern "C" void aingle_sha256(void *src, uint32_t srclen, void *dst);
+
+namespace aingle {
+
+using std::vector;
+using std::map;
+static vector<char> debug_prefix_aingle_args_input_wasm_local_debug;
+static vector<char> debug_prefix_aingle_contract_return_wasm_local_debug;
+static map<vector<char>, vector<char>> debug_prefix_aingle_storage_debug_map;
+
+void sha256(vector<char> &src, H256 &res) {
+	return ::aingle_sha256(src.data(), src.size(), res.data());
+}
+
+void hash256(vector<char> &src, H256 &res) {
+	H256 t;
+	sha256(src, t);
+	::aingle_sha256(t.data(), t.size(), res.data());
+}
+
+
+address self_address(void) {
+	address t;
+	return t;
+}
+
+address caller_address(void) {
+	address t;
+	return t;
+}
+
+address entry_address(void) {
+	address t;
+	return t;
+}
+
+void set_input(vector<char> input) {
+	debug_prefix_aingle_args_input_wasm_local_debug.clear();
+	debug_prefix_aingle_args_input_wasm_local_debug = input;
+}
+
+vector<char> get_input(void) {
+	return debug_prefix_aingle_args_input_wasm_local_debug;
+}
+
+bool check_witness(const address &v) {
+	return true;
+}
+
+H256 current_blockhash(void) {
+	H256 t;
+	return t;
+}
+
+H256 current_txhash(void) {
+	H256 t;
+	return t;
+}
+
+template<typename T>
+void aingle_return(const T &t) {
+	auto data = pack(t);
+	debug_prefix_aingle_contract_return_wasm_local_debug.clear();
+	debug_prefix_aingle_contract_return_wasm_local_debug = data;
+}
+
+void notify(const std::vector<char> &s) {
+}
+
+void notify(const std::string &s) {
+	printf("%s\n", s.c_str());
+}
+
+template<typename T>
+void get_call_output(T &t) {
+	t =	aingle_internal_namespace::unpack<T>(debug_prefix_aingle_contract_return_wasm_local_debug);
+}
+
+template<typename T>
+void call_native(const address &addr, const std::vector<char> &v, T &t) {
+	assert("local test not support multicontract call\n");
+}
+
+template<typename T>
+void call_contract(const address &addr, const std::vector<char> &v, T &t) {
+	assert("local test not support\n");
+}
+
+address contract_migrate(const std::vector<char> &code, const uint32_t &vmtype, const std::string &name, const std::string &version, const std::string &author, const std::string &email, const std::string &desc) {
+	address t;
+	return t;
+}
+
+template<typename T>
+void storage_put(const key &key, const T &val) {
+	auto mval = pack(val);
+	//debug_prefix_aingle_storage_debug_map.insert(map<vector<char>,vector<char>>::value_type(key, mval));
+	debug_prefix_aingle_storage_debug_map[key] = mval;
+}
+
+template<typename T>
+bool storage_get(const key &key, T &val) {
+	auto iter = debug_prefix_aingle_storage_debug_map.find(key);
+	if (iter != debug_prefix_aingle_storage_debug_map.end()) {
+		vector<char> s = iter->second;
+		val = aingle_internal_namespace::unpack<T>(s);
+		return true;
+	}
+	else
+		return false;
+}
+
+void storage_delete(const key& key) {
+	debug_prefix_aingle_storage_debug_map.erase(key);
+}
+
+#define make_key pack
+
+}
+#endif
